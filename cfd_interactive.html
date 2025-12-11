@@ -169,15 +169,6 @@
             color: #3498db;
         }
 
-        .particle {
-            position: absolute;
-            width: 4px;
-            height: 4px;
-            background: rgba(255,255,255,0.8);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-
         @media (max-width: 768px) {
             .dashboard { grid-template-columns: repeat(2, 1fr); }
             .card .value { font-size: 1.4em; }
@@ -188,7 +179,7 @@
 
 <div class="container">
     <h1>90° 彎管 CFD 模擬 <span class="badge">Navier-Stokes</span></h1>
-    <p class="subtitle">真實 CFD 計算結果 | Re = 150 | 120×120 網格</p>
+    <p class="subtitle">真實 CFD 計算結果 | Re = 150 | 120×120 網格 | 粒子追蹤 + LIC 紋理 + 流線箭頭</p>
 
     <div class="canvas-container">
         <canvas id="cfdCanvas" width="800" height="650"></canvas>
@@ -239,33 +230,42 @@
 </div>
 
 <script>
-// CFD 資料 (從 Python 計算結果嵌入)
-const CFD_DATA = null; // 將從外部 JSON 載入
-
 // 幾何參數 (與 Python 一致)
 const GEOM = {
     innerR: 0.25,
     outerR: 0.45,
     cx: 0.45,
     cy: 0.65,
-    scale: 650  // Canvas 縮放
+    scale: 650
 };
 
 const canvas = document.getElementById('cfdCanvas');
 const ctx = canvas.getContext('2d');
 const slider = document.getElementById('probeSlider');
 
+// === 增強效果參數 ===
+const NUM_PARTICLES = 300;        // 增加粒子數量 (原本 150)
+const PARTICLE_SIZE = 4;          // 增大粒子 (原本 2.5)
+const NUM_ARROWS = 60;            // 流線箭頭數量
+const TEXTURE_ALPHA = 0.35;       // LIC 紋理透明度 (加強對比)
+
 // 粒子系統
 let particles = [];
-const NUM_PARTICLES = 150;
 
-// 速度場資料 (會從 JSON 載入或即時計算)
+// 流線箭頭
+let arrows = [];
+
+// LIC 紋理
+let textureCanvas = null;
+let texturePhase = 0;
+
+// 速度場資料
 let velocityField = null;
 let speedField = null;
 
 // 初始化
 async function init() {
-    // 嘗試載入 CFD 資料
+    // 載入 CFD 資料
     try {
         const response = await fetch('cfd_data.json');
         const data = await response.json();
@@ -274,18 +274,23 @@ async function init() {
         console.log('CFD 資料載入成功:', data.nx, 'x', data.ny);
     } catch (e) {
         console.log('使用內建物理模型');
-        // 使用簡化物理模型
         generateSimplifiedField();
     }
 
-    // 初始化粒子
+    // 初始化粒子 (更多更大)
     initParticles();
+
+    // 初始化流線箭頭
+    initArrows();
+
+    // 預計算 LIC 紋理
+    initTexture();
 
     // 開始動畫
     animate();
 }
 
-// 簡化物理模型 (當 JSON 載入失敗時使用)
+// 簡化物理模型
 function generateSimplifiedField() {
     const nx = 120, ny = 120;
     speedField = [];
@@ -306,7 +311,6 @@ function generateSimplifiedField() {
     }
 }
 
-// 物理計算 (簡化版 - 當沒有 CFD 資料時使用)
 function getPhysicsAt(x, y) {
     const { innerR, outerR, cx, cy } = GEOM;
     const ductW = outerR - innerR;
@@ -314,14 +318,12 @@ function getPhysicsAt(x, y) {
     let inside = false;
     let speed = 0;
     let u = 0, v = 0;
-    let region = '';
 
     // 入口水平段
     if (x <= cx && y >= (cy - outerR) && y <= (cy - innerR)) {
         inside = true;
-        region = 'inlet';
         const n = (y - (cy - outerR)) / ductW;
-        speed = 4 * n * (1 - n); // 拋物線
+        speed = 4 * n * (1 - n);
         u = speed;
         v = 0;
     }
@@ -332,9 +334,7 @@ function getPhysicsAt(x, y) {
         const theta = Math.atan2(y - cy, x - cx);
         if (theta >= -Math.PI/2 && theta <= 0) {
             inside = true;
-            region = 'bend';
             const rNorm = (r - innerR) / ductW;
-            // 離心力效應
             speed = 0.3 + 0.8 * Math.pow(rNorm, 0.7);
             u = speed * Math.sin(-theta);
             v = -speed * Math.cos(-theta);
@@ -348,23 +348,20 @@ function getPhysicsAt(x, y) {
         const distFromBend = cy - y;
 
         if (distFromBend < 0.25) {
-            region = 'after_bend';
             const recovery = distFromBend / 0.25;
             const skew = 0.3 + 0.8 * Math.pow(xNorm, 0.6);
             const parabolic = 4 * xNorm * (1 - xNorm);
             speed = skew * (1 - recovery) + parabolic * recovery;
         } else {
-            region = 'outlet';
             speed = 4 * xNorm * (1 - xNorm);
         }
         u = 0;
         v = -speed;
     }
 
-    return { inside, speed, u, v, region };
+    return { inside, speed, u, v };
 }
 
-// 從場資料取得速度
 function getVelocityFromField(x, y) {
     if (!speedField) return { speed: 0, u: 0, v: 0, inside: false };
 
@@ -388,11 +385,19 @@ function getVelocityFromField(x, y) {
     };
 }
 
-// 初始化粒子
+// === 1. 粒子系統 (更多更大) ===
 function initParticles() {
     particles = [];
     for (let i = 0; i < NUM_PARTICLES; i++) {
         particles.push(createParticle());
+        // 隨機前進一段距離，讓粒子分散
+        for (let j = 0; j < Math.random() * 80; j++) {
+            const vel = getVelocityFromField(particles[i].x, particles[i].y);
+            if (vel.inside) {
+                particles[i].x += vel.u * 0.006;
+                particles[i].y += vel.v * 0.006;
+            }
+        }
     }
 }
 
@@ -400,9 +405,225 @@ function createParticle() {
     const { innerR, outerR, cy } = GEOM;
     return {
         x: 0.02,
-        y: cy - outerR + Math.random() * (outerR - innerR),
-        age: Math.random() * 100
+        y: cy - outerR + 0.02 + Math.random() * (outerR - innerR - 0.04),
+        trail: []  // 尾跡
     };
+}
+
+function drawParticles() {
+    const { scale } = GEOM;
+
+    for (const p of particles) {
+        const vel = getVelocityFromField(p.x, p.y);
+
+        if (vel.inside && vel.speed > 0.01) {
+            const canvasX = p.x * scale;
+            const canvasY = (1 - p.y) * scale;
+
+            // 儲存尾跡
+            p.trail.push({ x: canvasX, y: canvasY });
+            if (p.trail.length > 8) p.trail.shift();
+
+            // 繪製尾跡 (漸變透明)
+            if (p.trail.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo(p.trail[0].x, p.trail[0].y);
+                for (let i = 1; i < p.trail.length; i++) {
+                    ctx.lineTo(p.trail[i].x, p.trail[i].y);
+                }
+                ctx.strokeStyle = `rgba(255, 255, 255, 0.4)`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // 繪製粒子 (更大)
+            const hue = 240 * (1 - Math.min(vel.speed, 1));
+            ctx.beginPath();
+            ctx.arc(canvasX, canvasY, PARTICLE_SIZE, 0, Math.PI * 2);
+            ctx.fillStyle = `hsl(${hue}, 100%, 70%)`;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // 更新位置
+            p.x += vel.u * 0.012;
+            p.y += vel.v * 0.012;
+        }
+
+        // 重置
+        if (p.y < 0.02 || p.x > 0.98 || !getVelocityFromField(p.x, p.y).inside) {
+            Object.assign(p, createParticle());
+            p.trail = [];
+        }
+    }
+}
+
+// === 2. LIC 紋理 (加強對比) ===
+function initTexture() {
+    textureCanvas = document.createElement('canvas');
+    textureCanvas.width = 200;
+    textureCanvas.height = 200;
+}
+
+function drawTexture() {
+    if (!speedField) return;
+
+    const { scale } = GEOM;
+    const texCtx = textureCanvas.getContext('2d');
+    const tw = textureCanvas.width;
+    const th = textureCanvas.height;
+
+    // 更新相位
+    texturePhase += 0.15;
+
+    // 生成紋理
+    const imgData = texCtx.createImageData(tw, th);
+
+    for (let ty = 0; ty < th; ty++) {
+        for (let tx = 0; tx < tw; tx++) {
+            const x = tx / tw;
+            const y = ty / th;
+
+            const vel = getVelocityFromField(x, y);
+
+            if (vel.inside && vel.speed > 0.01) {
+                // LIC: 沿流線積分噪聲
+                let val = 0;
+                let px = x, py = y;
+                const spd = Math.sqrt(vel.u * vel.u + vel.v * vel.v);
+
+                for (let step = 0; step < 10; step++) {
+                    // 噪聲函數
+                    const noise = Math.sin((px * 50 + texturePhase) * 3) *
+                                  Math.cos((py * 50 - texturePhase) * 3) * 0.5 + 0.5;
+                    val += noise;
+
+                    // 沿流線前進
+                    const v = getVelocityFromField(px, py);
+                    if (!v.inside || v.speed < 0.01) break;
+                    px += v.u / spd * 0.01;
+                    py += v.v / spd * 0.01;
+                }
+                val /= 10;
+
+                // 加強對比
+                val = Math.pow(val, 0.7);
+
+                const idx = (ty * tw + tx) * 4;
+                const brightness = Math.floor(val * 255);
+                imgData.data[idx] = brightness;
+                imgData.data[idx + 1] = brightness;
+                imgData.data[idx + 2] = brightness;
+                imgData.data[idx + 3] = 255;
+            } else {
+                const idx = (ty * tw + tx) * 4;
+                imgData.data[idx + 3] = 0;  // 透明
+            }
+        }
+    }
+
+    texCtx.putImageData(imgData, 0, 0);
+
+    // 繪製到主 canvas
+    ctx.globalAlpha = TEXTURE_ALPHA;
+    ctx.drawImage(textureCanvas, 0, 0, scale, scale);
+    ctx.globalAlpha = 1;
+}
+
+// === 3. 流線箭頭 ===
+function initArrows() {
+    arrows = [];
+    const { innerR, outerR, cx, cy } = GEOM;
+    const ductW = outerR - innerR;
+
+    // 入口段
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 3; j++) {
+            arrows.push({
+                baseX: 0.08 + j * 0.12,
+                baseY: cy - outerR + 0.03 + i * (ductW - 0.06) / 3,
+                offset: Math.random()
+            });
+        }
+    }
+
+    // 彎管
+    for (let ri = 0; ri < 3; ri++) {
+        for (let ti = 0; ti < 5; ti++) {
+            const r = innerR + 0.03 + ri * (ductW - 0.06) / 2;
+            const theta = -ti * (Math.PI / 2) / 4 - 0.1;
+            arrows.push({
+                baseX: cx + r * Math.cos(theta),
+                baseY: cy + r * Math.sin(theta),
+                offset: Math.random()
+            });
+        }
+    }
+
+    // 出口段
+    for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 6; j++) {
+            arrows.push({
+                baseX: cx + innerR + 0.03 + i * (ductW - 0.06) / 2,
+                baseY: cy - 0.05 - j * 0.1,
+                offset: Math.random()
+            });
+        }
+    }
+}
+
+function drawArrows() {
+    const { scale } = GEOM;
+
+    for (const arrow of arrows) {
+        const vel = getVelocityFromField(arrow.baseX, arrow.baseY);
+        if (!vel.inside || vel.speed < 0.01) continue;
+
+        const spd = Math.sqrt(vel.u * vel.u + vel.v * vel.v);
+
+        // 週期性偏移 (產生流動感)
+        arrow.offset = (arrow.offset + vel.speed * 0.02) % 1;
+        const offsetDist = arrow.offset * 0.06;
+
+        const x = arrow.baseX + (vel.u / spd) * offsetDist;
+        const y = arrow.baseY + (vel.v / spd) * offsetDist;
+
+        // 檢查是否在管道內
+        const checkVel = getVelocityFromField(x, y);
+        if (!checkVel.inside) continue;
+
+        const canvasX = x * scale;
+        const canvasY = (1 - y) * scale;
+
+        // 箭頭方向
+        const angle = Math.atan2(-vel.v, vel.u);
+        const arrowLen = 12 + vel.speed * 8;
+
+        // 繪製箭頭
+        ctx.save();
+        ctx.translate(canvasX, canvasY);
+        ctx.rotate(angle);
+
+        // 箭頭主體
+        ctx.beginPath();
+        ctx.moveTo(-arrowLen / 2, 0);
+        ctx.lineTo(arrowLen / 2, 0);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 箭頭頭部
+        ctx.beginPath();
+        ctx.moveTo(arrowLen / 2, 0);
+        ctx.lineTo(arrowLen / 2 - 6, -4);
+        ctx.lineTo(arrowLen / 2 - 6, 4);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.fill();
+
+        ctx.restore();
+    }
 }
 
 // 繪製熱圖
@@ -420,7 +641,6 @@ function drawHeatmap() {
             const spd = speedField[i][j];
             if (spd < 0) continue;
 
-            // 色彩映射
             const hue = 240 * (1 - Math.min(spd, 1));
             ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
             ctx.fillRect(j * cellW, (ny - 1 - i) * cellH, cellW + 1, cellH + 1);
@@ -433,9 +653,8 @@ function drawBoundary() {
     const { innerR, outerR, cx, cy, scale } = GEOM;
 
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
 
-    // 轉換座標
     const toCanvas = (x, y) => [x * scale, (1 - y) * scale];
 
     // 入口段
@@ -453,7 +672,7 @@ function drawBoundary() {
     ctx.lineTo(x2, y2);
     ctx.stroke();
 
-    // 彎管 (圓弧)
+    // 彎管
     const cxCanvas = cx * scale;
     const cyCanvas = (1 - cy) * scale;
 
@@ -479,36 +698,13 @@ function drawBoundary() {
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
-}
 
-// 繪製粒子
-function drawParticles() {
-    const { scale } = GEOM;
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-
-    for (const p of particles) {
-        const vel = getVelocityFromField(p.x, p.y);
-
-        if (vel.inside && vel.speed > 0.01) {
-            // 繪製粒子
-            const canvasX = p.x * scale;
-            const canvasY = (1 - p.y) * scale;
-
-            ctx.beginPath();
-            ctx.arc(canvasX, canvasY, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-
-            // 更新位置
-            p.x += vel.u * 0.008;
-            p.y += vel.v * 0.008;
-        }
-
-        // 重置離開邊界的粒子
-        if (p.y < 0.02 || p.x > 0.98 || !vel.inside) {
-            Object.assign(p, createParticle());
-        }
-    }
+    // 標示內外壁
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = '#00aaff';
+    ctx.fillText('內壁', cx * scale - 60, (1 - (cy - innerR)) * scale - 10);
+    ctx.fillStyle = '#ff6600';
+    ctx.fillText('外壁', cx * scale - 60, (1 - (cy - outerR)) * scale + 20);
 }
 
 // 繪製探針
@@ -519,16 +715,13 @@ function drawProbe(progress) {
     let probeX, probeY, angle;
     let region = '';
 
-    // 根據進度計算探針位置
     if (progress < 0.35) {
-        // 入口段
         const p = progress / 0.35;
         probeX = 0.02 + p * (cx - 0.02);
         probeY = cy - innerR - ductW / 2;
         angle = 0;
         region = '直管入口';
     } else if (progress < 0.55) {
-        // 彎管
         const p = (progress - 0.35) / 0.2;
         const theta = -p * Math.PI / 2;
         const r = innerR + ductW / 2;
@@ -537,7 +730,6 @@ function drawProbe(progress) {
         angle = theta + Math.PI / 2;
         region = '彎管區域';
     } else {
-        // 出口段
         const p = (progress - 0.55) / 0.45;
         probeX = cx + innerR + ductW / 2;
         probeY = cy - p * cy;
@@ -545,11 +737,9 @@ function drawProbe(progress) {
         region = p < 0.3 ? '彎管後方' : '直管出口';
     }
 
-    // 轉換到 Canvas 座標
     const canvasX = probeX * scale;
     const canvasY = (1 - probeY) * scale;
 
-    // 繪製探針線
     ctx.save();
     ctx.translate(canvasX, canvasY);
     ctx.rotate(-angle);
@@ -564,18 +754,23 @@ function drawProbe(progress) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // 探針點
-    ctx.fillStyle = '#ff3333';
+    // 探針點 (更大更明顯)
     ctx.beginPath();
-    ctx.arc(0, ductW * scale * 0.3, 8, 0, Math.PI * 2);
+    ctx.arc(0, ductW * scale * 0.3, 12, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff3333';
     ctx.fill();
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.stroke();
+
+    // 探針標籤
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText('探針', -15, ductW * scale * 0.3 + 25);
 
     ctx.restore();
 
-    // 計算該位置的速度分佈
+    // 計算讀數
     let maxSpeed = 0, avgSpeed = 0, count = 0;
     const samples = 20;
 
@@ -605,8 +800,6 @@ function drawProbe(progress) {
     }
 
     avgSpeed = count > 0 ? avgSpeed / count : 0;
-
-    // 探針在外側測得的值
     const probeReading = maxSpeed * 0.9 + avgSpeed * 0.1;
 
     return { region, probeReading, avgSpeed, maxSpeed };
@@ -614,14 +807,12 @@ function drawProbe(progress) {
 
 // 更新儀表板
 function updateDashboard(data) {
-    const { region, probeReading, avgSpeed, maxSpeed } = data;
+    const { region, probeReading, avgSpeed } = data;
 
-    // 換算成 CMM (假設基準 30 CMM)
     const flowCMM = probeReading * 35 + 5;
     const trueCMM = avgSpeed * 30 + 5;
     const skewPercent = ((flowCMM - trueCMM) / trueCMM * 100).toFixed(0);
 
-    // 狀態判定
     let status, statusClass;
     if (Math.abs(skewPercent) < 10) {
         status = '準確';
@@ -634,7 +825,6 @@ function updateDashboard(data) {
         statusClass = 'bad';
     }
 
-    // 更新卡片
     document.querySelector('#cardRegion .value').textContent = region;
 
     const flowCard = document.getElementById('cardFlow');
@@ -655,20 +845,26 @@ function animate() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 繪製熱圖
+    // 1. 熱圖
     drawHeatmap();
 
-    // 繪製邊界
-    drawBoundary();
+    // 2. LIC 紋理 (加強對比)
+    drawTexture();
 
-    // 繪製粒子
+    // 3. 流線箭頭
+    drawArrows();
+
+    // 4. 粒子 (更多更大)
     drawParticles();
 
-    // 繪製探針並取得數據
+    // 5. 邊界
+    drawBoundary();
+
+    // 6. 探針
     const progress = slider.value / 1000;
     const data = drawProbe(progress);
 
-    // 更新儀表板
+    // 7. 更新儀表板
     updateDashboard(data);
 
     requestAnimationFrame(animate);
