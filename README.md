@@ -2,6 +2,17 @@
 
 90 度彎管風場 CFD 模擬動畫，展示為什麼彎管後的風速測量會偏高。
 
+## 互動式模擬 (推薦)
+
+**[點此開啟互動式流場模擬](https://seikaikyo.github.io/wind/flow_simulation.html)**
+
+使用滑軌控制測點位置，即時觀察不同位置的風速變化：
+
+- 拖動滑軌可沿管道移動測點
+- 顯示即時風量讀數 (CMM)
+- 顯示對應的變頻器頻率 (Hz)
+- 綠色/黃色/紅色狀態指示
+
 ## 模擬結果
 
 ### CFD 模擬動畫 (Navier-Stokes 求解)
@@ -40,7 +51,11 @@
 
 ## 使用方式
 
-### CFD 模擬（推薦）
+### 互動式模擬 (HTML5)
+
+直接用瀏覽器開啟 `flow_simulation.html`，或訪問 [GitHub Pages](https://seikaikyo.github.io/wind/flow_simulation.html)。
+
+### CFD 模擬（Python）
 
 ```bash
 # 生成 GIF
@@ -62,7 +77,7 @@ python duct_velocity_animation.py -f mp4
 
 ## 技術細節
 
-### CFD 求解器
+### CFD 求解器 (Python)
 
 - **方程式**：2D 穩態 Navier-Stokes 方程
 - **算法**：SIMPLE (Semi-Implicit Method for Pressure-Linked Equations) 簡化版
@@ -72,6 +87,13 @@ python duct_velocity_animation.py -f mp4
 - **網格**：120 x 120
 - **雷諾數**：Re = 150
 
+### 互動式模擬 (HTML5/JavaScript)
+
+- **幾何**：倒 U 型管道（兩個 90 度彎管）
+- **物理模型**：拋物線速度分佈 + 彎管處慣性偏移效應
+- **視覺化**：Canvas 2D 熱圖渲染
+- **互動**：滑軌控制測點位置，即時更新讀數
+
 ### 邊界條件
 
 - **入口**：拋物線速度分佈 (Dirichlet)
@@ -80,6 +102,7 @@ python duct_velocity_animation.py -f mp4
 
 ## 依賴套件
 
+Python 版本：
 ```bash
 pip install numpy matplotlib scipy
 ```
@@ -89,10 +112,13 @@ pip install numpy matplotlib scipy
 brew install ffmpeg  # macOS
 ```
 
+HTML 版本無需安裝任何套件，直接用瀏覽器開啟即可。
+
 ## 檔案說明
 
 | 檔案 | 說明 |
 |------|------|
+| `flow_simulation.html` | **互動式流場模擬** (推薦) |
 | `duct_cfd_real.py` | CFD 模擬主程式（Navier-Stokes 求解） |
 | `duct_velocity_animation.py` | 速度剖面動畫 |
 | `duct_cfd_simulation.py` | 簡化版 CFD 模擬 |
