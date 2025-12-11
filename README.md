@@ -4,22 +4,12 @@
 
 ## 互動式模擬
 
-### CFD 互動模擬 (推薦)
+**[點此開啟 CFD 互動模擬](https://seikaikyo.github.io/wind/cfd_interactive.html)**
 
-**[點此開啟 CFD 互動模擬](https://seikaikyo.github.io/wind/cfd_interactive.html)** - 使用真實 Navier-Stokes 計算結果
-
-- 真實 CFD 計算資料 (Re=150, 120×120 網格)
+- 真實 CFD 計算資料 (Navier-Stokes, Re=150, 120×120 網格)
 - 粒子流動動畫
 - 即時偏差百分比顯示
 - 拖動滑軌沿管道移動探針
-
-### 簡易版互動模擬
-
-**[點此開啟簡易版模擬](https://seikaikyo.github.io/wind/flow_simulation.html)** - 倒 U 型管道示意
-
-- 雙彎管幾何
-- 變頻器頻率對應
-- 簡化物理模型
 
 ## 模擬結果
 
@@ -61,13 +51,7 @@
 
 ### 互動式模擬 (HTML5)
 
-直接用瀏覽器開啟：
-- `cfd_interactive.html` - CFD 計算結果互動版 (推薦)
-- `flow_simulation.html` - 簡易版互動模擬
-
-或訪問 GitHub Pages：
-- [CFD 互動版](https://seikaikyo.github.io/wind/cfd_interactive.html)
-- [簡易版](https://seikaikyo.github.io/wind/flow_simulation.html)
+直接用瀏覽器開啟 `cfd_interactive.html`，或訪問 [GitHub Pages](https://seikaikyo.github.io/wind/cfd_interactive.html)。
 
 ### CFD 模擬（Python）
 
@@ -103,8 +87,7 @@ python duct_velocity_animation.py -f mp4
 
 ### 互動式模擬 (HTML5/JavaScript)
 
-- **CFD 版**：載入 Python 計算結果 (cfd_data.json)
-- **簡易版**：拋物線速度分佈 + 彎管處慣性偏移效應
+- **資料來源**：載入 Python CFD 計算結果 (cfd_data.json)
 - **視覺化**：Canvas 2D 熱圖 + 粒子追蹤
 - **互動**：滑軌控制探針位置，即時更新讀數
 
@@ -132,8 +115,7 @@ HTML 版本無需安裝任何套件，直接用瀏覽器開啟即可。
 
 | 檔案 | 說明 |
 |------|------|
-| `cfd_interactive.html` | **CFD 互動模擬** (推薦) |
-| `flow_simulation.html` | 簡易版互動模擬 |
+| `cfd_interactive.html` | **CFD 互動模擬** |
 | `cfd_data.json` | CFD 計算結果資料 |
 | `duct_cfd_real.py` | CFD 模擬主程式 (Navier-Stokes) |
 | `export_cfd_data.py` | 匯出 CFD 資料為 JSON |
