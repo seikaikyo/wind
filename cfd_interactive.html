@@ -365,17 +365,21 @@ function getPhysicsAt(x, y) {
 function getVelocityFromField(x, y) {
     if (!speedField) return { speed: 0, u: 0, v: 0, inside: false };
 
+    // 檢查 NaN
+    if (isNaN(x) || isNaN(y)) return { speed: 0, u: 0, v: 0, inside: false };
+
     const nx = speedField[0].length;
     const ny = speedField.length;
     const i = Math.floor(y * ny);
     const j = Math.floor(x * nx);
 
-    if (i < 0 || i >= ny || j < 0 || j >= nx) {
+    // 邊界檢查（包含 NaN 情況）
+    if (!(i >= 0 && i < ny && j >= 0 && j < nx)) {
         return { speed: 0, u: 0, v: 0, inside: false };
     }
 
     const spd = speedField[i][j];
-    if (spd < 0) return { speed: 0, u: 0, v: 0, inside: false };
+    if (spd < 0 || isNaN(spd)) return { speed: 0, u: 0, v: 0, inside: false };
 
     return {
         speed: spd,
